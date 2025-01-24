@@ -199,7 +199,6 @@ fn view(state: &TimerApp) -> iced::Element<Message> {
         .placeholder("Select YAML File");
 
     widget::column![
-        widget::text("Audio Timer").size(30),
         widget::text(time_text).size(40),
         widget::row![
             widget::button(button_label).on_press(Message::StartPause),
