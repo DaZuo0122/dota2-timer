@@ -246,7 +246,7 @@ fn view(state: &TimerApp) -> iced::Element<Message> {
         state.selected_file.clone(),
         Message::LoadYaml,
     )
-        .placeholder("Select YAML File");
+        .placeholder("Select Strategy File");
 
     let mut buttons = widget::row![start_restart_button];
     if let Some(btn) = pause_resume_button {
