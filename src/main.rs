@@ -181,7 +181,7 @@ fn update(state: &mut TimerApp, message: Message) {
         },
         Message::Tick(now) => match &mut state.state {
             TimerState::CountingDown(start_time) => {
-                let remaining = Duration::from_secs(60).saturating_sub(now.duration_since(*start_time));
+                let remaining = Duration::from_secs(90).saturating_sub(now.duration_since(*start_time));
                 state.current_display = remaining;
 
                 if remaining.is_zero() {
