@@ -11,7 +11,7 @@ A Tool Helps Dota2 Newbies Learn Timing Quickly. Written in Rust.
 
 ### Interface Controls
 - **Start/Restart Button**:
-    - First click: Starts 60s countdown
+    - First click: Starts 90s countdown
     - Subsequent clicks: Restarts timer from beginning
 - **Pause/Resume Button**:
     - Available when timer is running/paused
