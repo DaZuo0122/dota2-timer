@@ -1,7 +1,7 @@
 use iced::{
     time, widget, Size,
     window::{self, Level},
-    Application, Element, Subscription, Theme,
+    Subscription,
 };
 //use iced::executor::Default;
 use std::default::Default;
@@ -12,6 +12,7 @@ use std::{
     fs,
     time::{Duration, Instant},
 };
+use std::collections::HashSet;
 //use iced::window::Position::Default;
 
 #[derive(Debug, Deserialize)]
@@ -25,8 +26,8 @@ struct TimerApp {
     yaml_files: Vec<String>,
     selected_file: Option<String>,
     audio_map: HashMap<Duration, String>,
-    elapsed: Duration,
-    countdown: Duration,
+    current_display: Duration,
+    triggered_audio: HashSet<Duration>,
 
 }
 
@@ -34,7 +35,10 @@ struct TimerApp {
 enum TimerState {
     Idle,
     CountingDown(Instant),
-    Running(Instant),
+    Running {
+        base_time: Duration,
+        last_start: Instant,
+    },
     Paused(Duration),
 }
 
@@ -46,7 +50,8 @@ impl Default for TimerState {
 
 #[derive(Debug, Clone)]
 enum Message {
-    StartPause,
+    StartRestart,
+    PauseResume,
     LoadYaml(String),
     Tick(Instant),
 }
@@ -55,11 +60,11 @@ impl Default for TimerApp {
     fn default() -> Self {
         Self {
             yaml_files: get_yaml_files(),
-            countdown: Duration::from_secs(60),
             selected_file: None,
             audio_map: HashMap::new(),
-            elapsed: Duration::ZERO,
             state: TimerState::default(),
+            current_display: Duration::ZERO,
+            triggered_audio: HashSet::new(),
         }
     }
 }
@@ -79,9 +84,17 @@ fn get_yaml_files() -> Vec<String> {
 }
 
 impl TimerApp {
-    fn check_audio_triggers(&self) {
-        if let Some(path) = self.audio_map.get(&self.elapsed) {
-            play_audio(path);
+    fn check_audio_triggers(&mut self) {
+        let current_sec = self.current_display.as_secs();
+        let trigger_point = Duration::from_secs(current_sec);
+
+        if self.audio_map.contains_key(&trigger_point)
+            && !self.triggered_audio.contains(&trigger_point)
+        {
+            if let Some(path) = self.audio_map.get(&trigger_point) {
+                play_audio(path);
+                self.triggered_audio.insert(trigger_point);
+            }
         }
     }
 }
@@ -103,7 +116,7 @@ fn main() -> iced::Result {
         .subscription(subscription)
         .window(window::Settings {
             level: Level::AlwaysOnTop,
-            size: Size::new(300.0, 200.0),
+            size: Size::new(200.0, 120.0),
             ..window::Settings::default()
         })
         .run()
@@ -111,7 +124,7 @@ fn main() -> iced::Result {
 
 fn subscription(state: &TimerApp) -> Subscription<Message> {
     match &state.state {
-        TimerState::CountingDown(_) | TimerState::Running(_) => {
+        TimerState::CountingDown(_) | TimerState::Running{ .. } => {
             time::every(Duration::from_millis(10)).map(Message::Tick)
         }
         _ => Subscription::none(),
@@ -121,49 +134,71 @@ fn subscription(state: &TimerApp) -> Subscription<Message> {
 // UPDATE FUNCTION
 fn update(state: &mut TimerApp, message: Message) {
     match message {
-        Message::StartPause => match &state.state {
-            TimerState::Idle => {
-                state.state = TimerState::CountingDown(Instant::now());
-                state.countdown = Duration::from_secs(60);
+        Message::StartRestart => {
+            // Always reset to initial state when clicking Start/Restart
+            state.state = TimerState::CountingDown(Instant::now());
+            state.current_display = Duration::from_secs(60);
+            state.triggered_audio.clear();
+
+            // Reload the selected YAML file if present
+            if let Some(file) = &state.selected_file {
+                if let Ok(contents) = fs::read_to_string(file) {
+                    let config: Config = serde_yaml::from_str(&contents).unwrap();
+                    state.audio_map = config
+                        .audio
+                        .into_iter()
+                        .map(|(k, v)| (Duration::from_secs(k.into()), v))
+                        .collect();
+                }
             }
-            TimerState::Running(_) => {
-                state.state = TimerState::Paused(state.elapsed);
-            }
-            TimerState::Paused(d) => {
-                state.state = TimerState::Running(Instant::now() - *d);
-            }
-            TimerState::CountingDown(_) => {
-                state.state = TimerState::Idle;
-                state.countdown = Duration::from_secs(60);
-            }
+        },
+        Message::PauseResume => match &state.state {
+            TimerState::Running { base_time, last_start } => {
+                let elapsed = *base_time + last_start.elapsed();
+                state.state = TimerState::Paused(elapsed);
+                state.current_display = elapsed;
+            },
+            TimerState::Paused(elapsed) => {
+                state.state = TimerState::Running {
+                    base_time: *elapsed,
+                    last_start: Instant::now(),
+                };
+            },
+            _ => {}
         },
         Message::LoadYaml(file) => {
             state.selected_file = Some(file.clone());
+            state.audio_map.clear();  // Clear previous entries
+            state.triggered_audio.clear();
+
             if let Ok(contents) = fs::read_to_string(&file) {
-                let config: Config = serde_yaml::from_str(&contents).unwrap();
-                state.audio_map = config
-                    .audio
-                    .into_iter()
-                    .map(|(k, v)| (Duration::from_secs(k.into()), v))
-                    .collect();
+                if let Ok(config) = serde_yaml::from_str::<Config>(&contents) {
+                    state.audio_map = config.audio.into_iter().map(|(k, v)| {
+                        (Duration::from_secs(k.into()), v)
+                    }).collect();
+                }
             }
         },
         Message::Tick(now) => match &mut state.state {
-            TimerState::CountingDown(last_tick) => {
-                let elapsed = now - *last_tick;
-                state.countdown = state.countdown.saturating_sub(elapsed);
-                *last_tick = now; // Update last_tick reference
+            TimerState::CountingDown(start_time) => {
+                let remaining = Duration::from_secs(60).saturating_sub(now.duration_since(*start_time));
+                state.current_display = remaining;
 
-                if state.countdown.is_zero() {
-                    state.state = TimerState::Running(now);
-                    state.elapsed = Duration::ZERO;
+                if remaining.is_zero() {
+                    state.state = TimerState::Running {
+                        base_time: Duration::ZERO,
+                        last_start: Instant::now(),
+                    };
                 }
-            }
-            TimerState::Running(last_tick) => {
-                state.elapsed += now - *last_tick;
-                *last_tick = now;
+            },
+            TimerState::Running { base_time, last_start } => {
+                let elapsed = *base_time + last_start.elapsed();
+                state.current_display = elapsed;
                 state.check_audio_triggers();
-            }
+            },
+            TimerState::Paused(elapsed) => {
+                state.current_display = *elapsed;
+            },
             _ => {}
         },
     }
@@ -174,22 +209,37 @@ fn view(state: &TimerApp) -> iced::Element<Message> {
     let time_text = match &state.state {
         TimerState::CountingDown(_) => format!(
             "{:02}:{:02}",
-            state.countdown.as_secs() / 60,
-            state.countdown.as_secs() % 60
+            state.current_display.as_secs() / 60,
+            state.current_display.as_secs() % 60
         ),
         _ => format!(
             "{:02}:{:02}",
-            state.elapsed.as_secs() / 60,
-            state.elapsed.as_secs() % 60
+            state.current_display.as_secs() / 60,
+            state.current_display.as_secs() % 60
         ),
     };
 
-    let button_label = match state.state {
-        TimerState::Idle => "Start",
-        TimerState::CountingDown(_) => "Cancel",
-        TimerState::Running(_) => "Pause",
-        TimerState::Paused(_) => "Resume",
+    // Start/Restart button logic
+    let (start_label, _is_restart) = match state.state {
+        TimerState::Idle => ("Start", false),
+        _ => ("Restart", true),
     };
+
+    let start_restart_button = widget::button(start_label)
+        .on_press(Message::StartRestart)
+        .padding(10);
+
+    // Pause/Resume button logic
+    let pause_resume_button = match state.state {
+        TimerState::Running{base_time:_, last_start:_} => Some(widget::button("Pause")
+            .on_press(Message::PauseResume)
+            .padding(10)),
+        TimerState::Paused(_) => Some(widget::button("Resume")
+            .on_press(Message::PauseResume)
+            .padding(10)),
+        _ => None,
+    };
+
 
     let pick_list = widget::PickList::new(
         state.yaml_files.as_slice(),
@@ -198,13 +248,16 @@ fn view(state: &TimerApp) -> iced::Element<Message> {
     )
         .placeholder("Select YAML File");
 
+    let mut buttons = widget::row![start_restart_button];
+    if let Some(btn) = pause_resume_button {
+        buttons = buttons.push(btn);
+    }
+
     widget::column![
-        widget::text(time_text).size(40),
-        widget::row![
-            widget::button(button_label).on_press(Message::StartPause),
-        ],
+        widget::text(time_text).size(25),
+        buttons,
         pick_list
     ]
-        .padding(20)
+        .padding(12)
         .into()
 }
