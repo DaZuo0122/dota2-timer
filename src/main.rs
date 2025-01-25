@@ -137,7 +137,7 @@ fn update(state: &mut TimerApp, message: Message) {
         Message::StartRestart => {
             // Always reset to initial state when clicking Start/Restart
             state.state = TimerState::CountingDown(Instant::now());
-            state.current_display = Duration::from_secs(60);
+            state.current_display = Duration::from_secs(90);
             state.triggered_audio.clear();
 
             // Reload the selected YAML file if present
